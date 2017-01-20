@@ -1,0 +1,91 @@
+---
+title: Interpolation
+author:
+- ESR 512 - GIS in Geostatistics
+- Postgraduate Institute of Science
+- University of Peradeniya
+- Thusitha Wagalawatta & Daniel Knitter
+date: 10/2015
+email: daniel.knitter@fu-berlin.de
+bibliography: Course_Statistics_SriLanka.bib
+csl: harvard1.csl
+output:
+  html_document:
+    toc: false
+    theme: united
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+  pdf_document:
+    toc: false
+    toc_depth: 2
+    number_sections: true
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+highlight: pygments
+---
+
+
+
+```{r setup, eval=TRUE, echo=FALSE}
+setwd("/media/daniel/homebay/Teachings/WS_2015-2016/Statistics_SriLanka/")
+```
+
+## Interpolation ##
+
+As an example we will interpolate the altitude of the peak shapefile.
+
+```{r eval=TRUE, echo=TRUE}
+library(rgdal)
+srtm <- readGDAL("./results/srtm.tif")
+str(srtm@proj4string)
+
+peaks <- readOGR(dsn = "./data/DSL250-Shp/", layer = "Peaks")
+str(peaks)
+peaks <- spTransform(x = peaks, CRSobj = srtm@proj4string)
+```
+
+We will start with a determinstic interpolation approach that you should be familiar with: Inverse Distance Weighting (IDW).
+
+```{r idw}
+library(gstat)
+peak_idw <- idw(peaks@data$ALTITUDE ~ 1, peaks, srtm, maxdist = 200000, idp = 2)
+#spplot(peak_idw)
+plot(raster(peak_idw))
+#contour(peak_idw, add=TRUE)
+points(peaks,pch=20,cex=.4)
+```
+
+Now, let us try a statistical interpolation approach, i.e. simple Kriging.
+
+```{r kriging}
+library(gstat)
+
+plot(variogram(peaks@data$ALTITUDE ~ 1, peaks, cloud = TRUE))
+plot(variogram(peaks@data$ALTITUDE ~ 1, peaks))
+
+plot(variogram(peaks@data$ALTITUDE ~ 1, peaks, alpha = c(0,45,90,135)))
+
+vt <- variogram(peaks@data$ALTITUDE ~ 1, peaks)
+
+show.vgms()
+
+v.fit <- fit.variogram(vt,
+	vgm(nugget = 0, model = "Gau", psill = 800000, range = 40000))
+v.fit2 <- fit.variogram(vt,
+	vgm(nugget = 0, model = "Sph", psill = 800000, range = 40000))
+plot(vt,v.fit)
+plot(vt,v.fit2)
+
+peak_k <- krige(peaks@data$ALTITUDE ~ 1, peaks, srtm, v.fit,nmin = 3, maxdist = 300000, nmax = 7)
+peak_k2 <- krige(peaks@data$ALTITUDE ~ 1, peaks, srtm, v.fit2,nmin = 3, maxdist = 300000, nmax = 7)
+
+par(mfrow = c(1,2))
+plot(raster(peak_k),main="Kriging using Gaussian fit")
+points(peaks,pch=20,cex=.4)
+plot(raster(peak_k2),main="Kriging using Spherical fit")
+points(peaks,pch=20,cex=.4)
+```

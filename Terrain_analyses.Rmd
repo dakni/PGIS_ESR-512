@@ -1,0 +1,409 @@
+---
+title: Geomorphometric Analyses
+author:
+- ESR 512 - GIS in Geostatistics
+- Postgraduate Institute of Science
+- University of Peradeniya
+- Thusitha Wagalawatta & Daniel Knitter
+date: 10/2015
+email: daniel.knitter@fu-berlin.de
+bibliography: Course_Statistics_SriLanka.bib
+csl: harvard1.csl
+output:
+  html_document:
+    toc: false
+    theme: united
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+  pdf_document:
+    toc: false
+    toc_depth: 2
+    number_sections: true
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+highlight: pygments
+---
+
+
+# Terrain analyses #
+```{r setup, eval=TRUE, echo=FALSE}
+setwd("/media/daniel/homebay/Teachings/WS_2015-2016/Statistics_SriLanka/")
+```
+
+## Data preparation ##
+
+Please download SRTM scenes of Sri Lanka from http://srtm.csi.cgiar.org/, unzip them and load them into `R` using the `rgdal` package.
+
+```{r echo=TRUE}
+library(rgdal)
+srtm1 <- readGDAL("./data/SRTM/srtm_52_11.tif")
+srtm2 <- readGDAL("./data/SRTM/srtm_53_11.tif")
+str(srtm2)
+par(mfrow = c(1,2))
+image(srtm1);image(srtm2)
+```
+
+To conduct terrain analyses in `R` we use the `raster` package. But before we can start we need to merge the two SRTM scenes. [besides we aggregate the SRTM scene in order to accelerate computation -- since these are only introductory examples]
+
+```{r echo=TRUE}
+library(raster)
+srtm1 <- raster(srtm1)
+srtm2 <- raster(srtm2)
+srtm <- merge(srtm1,srtm2)
+res(srtm)
+srtm <- projectRaster(srtm, res=90, crs=CRS("+init=epsg:32644"))
+srtm.backup <- srtm
+srtm <- aggregate(x = srtm, fact = 10, fun = mean)
+srtm
+plot(srtm)
+```
+
+[please note that we could have spared two lines of code by directly importing the SRTM scenes into `R` using the raster package: `srtm1 <- raster("./data/SRTM/srtm_52_11.tif")`]
+
+Fine, now we have a single SRTM scene - but it is very large and incorporates some unnecessary parts (India in this case and a lot of the Indian Ocean). Fortunately, we have a shapefile of your country. Let us cut the scene based on this.
+
+```{r echo=TRUE}
+library(rgdal)
+sb <- readOGR(dsn = "./data/DSL250-Shp/", layer = "Boundary")
+plot(sb)
+str(sb@proj4string)
+```
+
+The plot looks as expected but be aware of differences between the SRTM and the boundary coordinate systems. Let's see what happens when we ignore this issue
+
+```{r echo=TRUE, eval=FALSE}
+srtm <- crop(x = srtm, y = sb)
+Error in .local(x, y, ...) : extents do not overlap
+```
+
+So, we need to reproject/transform the data first. This is fast and easy. Afterwards we can crop our SRTM scene. Last not least we store the merged, cropped, and reprojected raster as new file. 
+
+```{r echo=TRUE}
+sb <- spTransform(x = sb, CRSobj = srtm@crs)
+str(sb@proj4string)
+srtm <- crop(x = srtm, y = sb)
+plot(srtm)
+extent(srtm)
+writeRaster(x = srtm, filename = "./results/srtm.tif", format = "GTiff", overwrite = TRUE)
+```
+
+## Terrain analyses of the Kandy region using `R` ##
+
+Now it is time to create some terrain parameters (you can connect `R` to other GIS systems to conduct all geomorphometric analyses that are available there. The only thing you need is the necessary library and the desired GIS system installed. Great options are `RSAGA` to conntect R to SAGA GIS and `spgrass6` to connect R to GRASS GIS (works with GRASS 6 as well as GRASS 7). We will do this later. For now, we use the tools available in the `raster` package.
+
+We will conduct the terrain analyses in the surroundings of Kandy on a 90x90m SRTM scene. After what we have learned so far it is straight forward to achieve such a raster.
+
+```{r srtm_kandy}
+kandy <- c(459047.6, 806090.7)
+study_area <- rbind(c(kandy[1]-50000,kandy[1]+50000),
+                    c(kandy[2]-50000,kandy[2]+50000))
+srtm <- crop(srtm.backup, study_area)
+```
+
+Using the `raster` package we can create a lot of different terrain parameters by just one line of code. The result will be a multi-layer raster object, like you know it from multi-/hyperspectral satellite images. You can work on such scenes like you would work on ordinary vector objects in `R`.
+
+```{r terrain_parameter, echo=TRUE}
+srtm.tp <- terrain(x = srtm, opt = c("slope", "aspect", "TPI", "TRI", "roughness", "flowdir"), unit = "degrees", neighbors = 8)
+```
+
+> **Exercise**
+>
+> 1. Plot the TPI raster
+> 2. What kind of object did you create using the terrain function above?
+> 3. What is the cell size of the object?
+> 4. What is the mean slope for the raster?
+> 5. What does it mean to use 8 neighbors?
+
+You should be familiar with slope and aspect but do you know the what the other parameter are? A look in the help offers insights (they are based on @Wilson2007):
+
+- "TRI (Terrain Ruggedness Index) is the mean of the absolute differences between the value of a cell and the value of its 8 surrounding cells.
+- TPI (Topographic Position Index) is the difference between the value of a cell and the mean value of its 8 surrounding cells.
+- Roughness is the difference between the maximum and the minimum value of a cell and its 8 surrounding cells" (from `?raster::terrain`)
+
+The help also explains that we can use focal functions in order the adapt the approaches to our needs. A *focal function* corresponds to a moving window. It uses a matrix of weights for the neighborhood of the focal cells.
+
+### TPI for different neighborhood size:
+
+```{r tpi_focal}
+tpiw <- function(x, w=5) {
+    m <- matrix(1/(w^2-1), nc=w, nr=w)
+    m[ceiling(0.5 * length(m))] <- 0 # set the centre cell 0
+    f <- focal(x, m, pad = TRUE) # apply moving window
+    x - f
+}
+tpi15 <- tpiw(x = srtm, w=15)
+tpi31 <- tpiw(x = srtm, w=31)
+#par(mfrow=c(1,3))
+#plot(srtm.tp$tpi)
+#plot(tpi15)
+#plot(tpi31)
+```
+
+For better visualisation we calculate a hillshade and overlay the TPI raster.
+
+```{r tpi-plot, echo=TRUE}
+srtm.hs <- hillShade(slope = terrain(srtm, opt="slope"),
+	aspect = terrain(srtm, opt="aspect"),
+	angle= 150, direction = 45, normalize = TRUE)
+plot(srtm.hs,
+	col = gray.colors(n= 255, start=.2, end=.9),
+	legend = FALSE)
+plot(tpi31,
+	col=colorRampPalette(c("red", "white", "blue"))(255),
+	alpha = .5, add=TRUE)
+```
+
+> **Excercise**
+>
+> TPI is scale dependent. What does it mean? How can the following plot be used to explain the phenomenon?
+
+```{r tpi-plot2, echo=TRUE}
+library(rasterVis)
+#srtmTheme <- rasterTheme(region=terrain.colors(200))
+#levelplot(srtm, par.settings = srtmTheme)
+levelplot(brick(tpi31, tpi15,srtm.tp$tpi), par.settings = RdBuTheme)
+```
+
+Create elevation profile
+
+```{r profile-plot, echo=TRUE}
+a <- Line(coords = cbind(c(kandy[1]-50000,kandy[1]+50000),c(kandy[2] ,kandy[2])))
+b <- Lines(list(a),ID="1")
+c <- SpatialLines(list(b), proj4string=srtm@crs)
+e.prof <- extract(x = srtm, y = c)
+t.prof <- extract(x = srtm.tp, y = c)
+
+prof.x <- cellFromLine(srtm, c)
+prof.x <- xyFromCell(srtm,prof.x[[1]])
+
+plot(srtm)
+lines(c)
+plot(prof.x[,1],e.prof[[1]], type = "l",lwd=.6, ylab="Elevation (m)", xlab="UTM coordinate in Meter")
+abline(v = kandy, col = "red")
+#plot(t.prof[[1]][,2], type = "l",lwd=.2, ylab="TPI")
+```
+
+## Terrain parameter of the Kandy region using GRASS GIS ##
+
+Be aware, for the following to work you need to have GRASS GIS installed on your system.
+
+Load library, initialize the GRASS environment with default values (everything is stored as temporary files; you can change this if you want to come back to earlier stages of your work)
+
+```{r init_grass, eval = TRUE, echo = TRUE}
+library(spgrass6)
+loc <-  initGRASS("/usr/local/grass-7.0.0svn/", home=tempdir(), mapset = "PERMANENT", override = TRUE)
+loc <-  initGRASS("C:/Program Files/QGIS Wien/apps/grass/grass-6.4.3/bin", home=tempdir(), mapset = "PERMANENT", override = TRUE)
+```
+
+Now we check and set our spatial reference and load our SRTM from `R` into GRASS.
+
+```{r eval = TRUE, echo = TRUE}
+## check the location and define it according to our data
+execGRASS("g.proj", flags = c("p"))
+execGRASS("g.proj", flags = c("c"), parameters = list(proj4="+init=epsg:32644"))
+```
+
+```{r eval = TRUE, results = "hide"}
+## load data from R to grass
+library(rgdal)
+writeRAST6(x = as(srtm, "SpatialGridDataFrame"), vname="dem", flags = c("overwrite"))
+```
+
+Let us inspect the dataset and the characteristics of our GRASS region. 
+
+```{r eval = TRUE, echo = TRUE}
+## GRASS - show raster in mapset
+execGRASS("r.info", parameters = list(map = "dem"))
+execGRASS("g.region", flags = c("p"))
+```
+
+As you can see there is a difference in the extent and resolution of our GRASS area and the SRTM. Let us fix this.
+
+```{r eval = TRUE, echo = TRUE}
+## adjust Regions resolution!
+execGRASS("g.region", parameters = list(raster = "dem",res = as.character(res(srtm)[1])))
+execGRASS("g.region", flags = c("p"))
+```
+
+After fixing this we will now create differnt terrain paramters.
+
+### Example 1: Curvature
+
+```{r terr_par_GRASS, eval = TRUE, echo = TRUE, results="hide"}
+parseGRASS("r.param.scale")
+
+execGRASS("r.param.scale", parameters = list(input = "dem",
+                               output = "profcurv",
+                               method = "profc",
+                               size = 13),
+          flags = c("overwrite"))
+
+profcurv <- raster(readRAST6("profcurv"))
+plot(srtm.hs,
+	col = gray.colors(n= 255, start=.2, end=.9),
+	legend = FALSE)
+plot(profcurv, alpha=.5, add=TRUE)
+title("Profile Curvature")
+```
+
+### Example 2: Simple landform classification
+
+```{r simple_landform, eval = TRUE, echo = TRUE, results="hide"}
+execGRASS("r.param.scale", parameters = list(input = "dem",
+                               output = "landforms",
+                               method = "feature",
+                               size = 15),
+          flags = c("overwrite"))
+
+landforms <- raster(readRAST6("landforms"))
+
+landforms <- ratify(landforms)
+tmp <- levels(landforms)[[1]]
+tmp$Landform <- c("Planar","Pit","Channel","Pass","Ridge","Peak")
+levels(landforms) <- tmp
+levels(landforms)
+
+#library(rasterVis)
+#levelplot(landforms)
+
+plot(srtm.hs,
+	col = gray.colors(n= 255, start=.2, end=.9),
+	legend = FALSE)
+plot(landforms, col=colorRampPalette(c("white", "darkblue","blue", "yellow","brown","black"))(6),alpha=.5, add=TRUE, legend = FALSE)
+title("Landforms")
+mycol <- colorRampPalette(c("white", "darkblue","blue", "yellow","brown","black"))(6)
+legend(x="topright",legend = tmp$Landform, fill = mycol)
+points(SpatialPoints(coords=cbind(kandy[1],kandy[2]), proj4string = srtm@crs), pch=19)
+```
+
+
+> **Exercise**
+>
+> What does the different terrain parameters show? How are they characterized? Answer the question using the help of the corresponding GRASS GIS package. 
+
+## Watershed delineation
+
+The GRASS packages `r.watershed` is a great tool for fast and comprehensive analyses of basic terrain-hydrological analyses. We will create different rasters that can be used for subsequent and more adavanced analyses. 
+
+Besides `r.watershed` there is the `r.stream.*` family that has complementary and besides this many additional features, e.g. automatic extraction of stream orders and calculation of stream and catchment characteristics. You need to install the package in GRASS first using `g.extension`. For more information have a look at https://grasswiki.osgeo.org/wiki/R.stream.*_modules
+
+```{r watershed_analyses, eval = TRUE, echo = FALSE, results="hide"}
+## catchment analyses
+parseGRASS("r.watershed")
+
+execGRASS("r.watershed", parameters = list(elevation = "dem",
+                             threshold = 15000,
+                             accumulation = "fac",
+                             basin = "basins",
+                             drainage = "fdir",
+                             stream = "streams_r"
+                                           ),
+          flags = c("overwrite","b","a"))
+
+fac <- raster(readRAST6("fac"))
+plot(fac)
+fac2 <- stretch(fac, minq=.1,maxq=.9)
+
+plot(srtm.hs,
+	col = gray.colors(n= 255, start=.2, end=.9),
+	legend = FALSE)
+plot(fac2, col = colorRampPalette(c("yellow","green","blue"))(255), alpha = .4, add=TRUE)
+title("Flow accumulation - 8bit scaled")
+
+fdir <- raster(readRAST6("fdir"))
+#plot(fdir, col = gray.colors(255,0,.6))
+
+basins <- raster(readRAST6("basins"))
+plot(basins, col = rainbow(50), legend = FALSE)
+
+parseGRASS("r.to.vect")
+
+execGRASS("r.to.vect", parameters = list(input = "streams_r",
+                           output = "streams",
+                           type = "line"
+                           ),
+          flags = c("v","overwrite"))          
+
+execGRASS("v.out.ogr", parameters = list(input = "streams",
+                           type = "line",
+                           output = "/media/daniel/homebay/Teachings/WS_2015-2016/Statistics_SriLanka/results/",
+                           format = "ESRI_Shapefile"
+                           ),
+          flags = c("overwrite"))
+
+streams <- readOGR("./results","streams")
+
+plot(srtm.hs,
+	col = gray.colors(n= 255, start=.2, end=.9),
+	legend = FALSE)
+plot(basins, col = rainbow(30), legend = FALSE, alpha = .3, add=TRUE)
+lines(streams, col="blue")
+points(SpatialPoints(coords=cbind(kandy[1],kandy[2]), proj4string = srtm@crs), pch=19)
+
+## optional: add the "real" Mahaweli Ganga
+# tmp<-readOGR("./data/DSL250-Shp", "Streams")
+# tmp <- spTransform(x = tmp, CRSobj = srtm@crs)
+# plot(tmp[tmp@data$NAME=="Mahaweli Ganga",], add=TRUE)
+
+title("Basins and streams")
+```
+
+## Landform classification ##
+
+Landform classification based on machine learning ideas and principal component analysis.
+
+First we will add some terrain parameters calculated with GRASS to our raster brick object `srtm.tp`.
+
+```{r echo=FALSE}
+srtm.tp$profcurv <- brick(profcurv)
+srtm.tp$tpi31 <- brick(tpi31)
+srtm.tp
+
+tp <- as(srtm.tp, "SpatialGridDataFrame")
+
+# principal component analysis
+pc.dem <- prcomp(~tri+tpi+roughness+slope+flowdir+profcurv+tpi31, data = tp@data, scale=TRUE,na.action = na.exclude) # na.exclude and not na.omit, since it is intended to keep NAs (because these represent the ocean and of course lacks in the data)
+biplot(pc.dem, arrow.len = 0.1, xlabs = rep(".", length(pc.dem$x[,1])),main = "PCA biplot") # takes time...
+
+# in case the biplot shows that some variables are correlated
+#pc.dem <- prcomp(~TRI+TWI+TPI, data = dem.param@data, scale=TRUE,na.action = na.exclude) # na.exclude and not na.omit, since it is intended to keep NAs (because these represent the ocean and of course lacks in the data)
+#biplot(pc.dem, arrow.len = 0.1, xlabs = rep(".", length(pc.dem$x[,1])),main = "PCA biplot") # takes time...
+
+demdata <- as.data.frame(pc.dem$x)
+
+tmp<-na.omit(demdata)
+
+wss <- (nrow(tmp)-1)*sum(apply(tmp,2,var))
+for (i in 2:20) {
+     wss[i] <- sum(kmeans(tmp,centers=i)$withinss)
+}
+plot(wss)
+lines(wss)
+
+kmeans.dem <- kmeans(na.omit(demdata),centers=5,iter.max=500) #kmeans 
+# two small functions to implement the omitted NAs in the end
+demdata$cluster <- rep(NA, nrow(demdata))
+demdata[names(kmeans.dem$cluster), "cluster"] <- kmeans.dem$cluster
+tp$kmeans.dem <- demdata$cluster
+#dem.param$landform <- as.factor(demdata$cluster)
+#summary(dem$landform)
+#tp@data$kmeans.dem <- as.numeric(dem.param@data$kmeans.dem) # for export, gdal needs numeric values
+
+# remove all bands except the fuzzy kmeans results
+lc <- tp
+lc@data <- subset(lc@data, select = kmeans.dem) # just select the relevant data
+## another possibility:
+## lc <- raster(lc,5) # create raster object using band 5
+
+plot(raster(lc))
+```
+
+> **Exercise**
+>
+> 1. Create a plot where the results of the automatic landform classification that we created using GRASS GIS and our own classification using kmeans are plotted
+> 2. Describe the results.
+> 3. Discuss how could the landform classification be improved?

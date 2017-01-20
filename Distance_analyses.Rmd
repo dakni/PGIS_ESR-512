@@ -1,0 +1,191 @@
+---
+title: Distance analyses
+author:
+- ESR 512 - GIS in Geostatistics
+- Postgraduate Institute of Science
+- University of Peradeniya
+- Thusitha Wagalawatta & Daniel Knitter
+date: 10/2015
+email: daniel.knitter@fu-berlin.de
+bibliography: Course_Statistics_SriLanka.bib
+csl: harvard1.csl
+output:
+  html_document:
+    toc: false
+    theme: united
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+  pdf_document:
+    toc: false
+    toc_depth: 2
+    number_sections: true
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+highlight: pygments
+---
+
+```{r setup, eval=TRUE, echo=FALSE}
+setwd("/media/daniel/homebay/Teachings/WS_2015-2016/Statistics_SriLanka/")
+```
+
+# What is the shortest path from Colombo to Kandy? # 
+
+```{r, eval=TRUE, echo=TRUE}
+
+library(rgdal)
+cities <- readOGR(dsn = "./data/DSL250-Shp", layer = "Cities")
+str(cities@data)
+
+## as polygons
+colombo <- cities[cities@data$NAME=="COLOMBO",]
+kandy <- cities[cities@data$NAME=="KANDY",]
+
+## as points
+library(rgeos)
+p.colombo <- gCentroid(cities[cities@data$NAME=="COLOMBO",])
+p.kandy <- gCentroid(cities[cities@data$NAME=="KANDY",])
+ 
+par(mfrow = c(1,2))
+plot(colombo, main = "Colombo")
+points(p.colombo)
+plot(kandy, main = "Kandy")
+points(p.kandy)
+
+## fancy
+## install.packages("plotGoogleMaps")
+## library(plotGoogleMaps)
+## plotGoogleMaps(p.kandy)
+```
+
+## Euclidean Distance ##
+
+The Euclidean distance between points i and j is the length of the line segment connecting them.
+
+$$
+\begin{aligned}
+d(i,j) = \sqrt{(x_i-x_j)^2 + (y_i-y_j)^2}
+\end{aligned}
+$$
+
+
+```{r, eval=TRUE, echo=TRUE}
+## Euclidean Distance - manual
+sqrt((p.kandy@coords[1]-p.colombo@coords[1])^2+(p.kandy@coords[2]-p.colombo@coords[2])^2)
+
+## Euclidean Distance - with own function
+e.d <- function(x, y) {
+    sqrt(sum((x - y)^2))
+}
+e.d(p.kandy@coords,p.colombo@coords)
+
+## using package
+library(fields)
+rdist(p.kandy@coords,p.colombo@coords)
+
+library(rgeos)
+gDistance(p.kandy,p.colombo)
+
+```
+
+## Least Cost Distance ##
+
+
+
+```{r, eval=TRUE, echo=TRUE}
+## load srtm data
+library(raster)
+srtm <- raster(x = "./results/srtm.tif")
+
+### LEAST COST PATH ###
+#######################
+
+nz <- 8   # neigbourhood number: 4,8,16
+ras <- focal(srtm, w=matrix(1/9,nrow=3,ncol=3), NAonly=TRUE) # define the moving window and store it in the raster object; it is not allowed to chose the moving window too large because than a "jump" over high cost/ low conductivity cells would be possible
+plot(ras, col = gray.colors(25, start = 0.97, end = 0.4))
+
+
+# cost functions
+# Tobler1993 velocity
+tobler1993a <- function(s){6 * exp(-3.5 * abs(s + 0.05))}      # km/h
+tobler1993b <- function(s){0.36 * exp(-3.5 * abs(s + 0.05))}   # m/min
+
+## ## plot cost function
+plot(tobler1993a
+     ,xlim = c(-1,1)
+     ,main = "Slope-dependent cost function (Tobler)"
+     ,xaxt="n",yaxt="n"
+     ,xlab = "",ylab = "")
+mtext(side = 1, text = "slope", line = 2)
+mtext(side = 2, text = "speed (km/h)", line = 2)
+axis(2, mgp=c(3, .5, 0))
+axis(1, mgp=c(3, .5, 0))
+abline(v = 0, lty = 2)
+
+library(gdistance) # https://cran.r-project.org/web/packages/gdistance/index.html
+# auxilliary function
+hdiff <- function(x){(x[2]-x[1])} # calculates the difference of a vector
+
+# transitional object 
+hd <- transition(ras,hdiff,nz,symm=FALSE) # calculate the slope of the input data; store the conductivity for the movement to all other cells from any specfic cell
+slope <- geoCorrection(hd,scl=FALSE) # geocorrection of the object because the diagonal distance is larger than a vertical distance [in the pixel case]
+adj <- adjacent(x=ras, cells=1:ncell(ras), direction=nz) # adjacency list - from X to Y
+cost <- slope       
+cost[adj] <- tobler1993a(slope[adj]) # and here the conductivity function comes into account
+conduct <- geoCorrection(cost, scl=FALSE) # transform cost to conductivity; conductivity=cost/dist; time=1/conductivity; we need the geocorection twice because
+
+
+p.colombo <- spTransform(p.colombo, CRSobj = srtm@crs)
+p.kandy <- spTransform(p.kandy, CRSobj = srtm@crs)
+
+co.to.ka <- shortestPath(conduct, origin = p.colombo@coords, goal = p.kandy@coords, output="SpatialLines")
+ka.to.co <- shortestPath(conduct, origin = p.kandy@coords, goal = p.colombo@coords, output="SpatialLines")
+
+
+plot(srtm,
+     xlim = c(300000,500000), ylim = c(730000,830000),
+	 main = "Least-cost path\n based on Tobler's function for walking speed")
+lines(co.to.ka, col = "red")
+lines(ka.to.co, col = "blue")
+points(p.colombo, pch = 19, cex = .5)
+points(p.kandy, pch = 19, cex = .5)
+text(p.colombo@coords[1], p.colombo@coords[2] - 2500, "Colombo")
+text(p.kandy@coords[1], p.kandy@coords[2] + 2500, "Kandy")
+
+## insert the modern highway from Colombo to Kandy as comparison
+m.r <- readOGR("./data/DSL250-Shp", "Roads")
+m.r <- spTransform(m.r, srtm@crs)
+lines(m.r[m.r@data$CLASS=="A1",], col="black")
+
+## and at the the a nice legend
+legend("bottom", c("Colombo - Kandy", "Kandy - Colombo", "A1"),
+       lty = c(1,1,1), col = c("red", "blue", "black"), bty = "n")
+
+
+e.co.ka <- SpatialLines(list(Lines(Line(coords = (rbind(p.colombo@coords,p.kandy@coords))), ID="1")),proj4string = srtm@crs)
+
+p.co.to.ka <- extract(x=srtm, y=co.to.ka, along=TRUE)
+p.ka.to.co <- extract(x=srtm, y=ka.to.co, along=TRUE)
+p.e.co.ka <- extract(x=srtm, y=e.co.ka, along=TRUE)
+
+library(rgeos)
+
+par(mfrow = c(3,1))
+plot(p.e.co.ka[[1]], type="l",
+     main = "Elevation profile \nfrom Colombo to Kandy (euclidean)",
+     sub = paste("Distance ",round(gLength(e.co.ka)/1000,2)," km",sep=""))
+plot(p.co.to.ka[[1]], type="l",
+     main = "Elevation profile \nfrom Colombo to Kandy (least cost)",
+     sub = paste("Distance ",round(gLength(co.to.ka)/1000,2)," km",sep=""))
+plot(p.ka.to.co[[1]], type="l",
+     main = "Elevation profile \nfrom Kandy to Colombo (least cost)",
+     sub = paste("Distance ",round(gLength(ka.to.co)/1000,2)," km",sep=""))
+
+```
+
+> **Exercise**
+>
+> Create some other shortest paths. For example for your home to the university?!

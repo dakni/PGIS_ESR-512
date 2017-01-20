@@ -1,0 +1,385 @@
+---
+title: Point pattern
+author:
+- ESR 512 - GIS in Geostatistics
+- Postgraduate Institute of Science
+- University of Peradeniya
+- Thusitha Wagalawatta & Daniel Knitter
+date: 10/2015
+email: daniel.knitter@fu-berlin.de
+bibliography: Course_Statistics_SriLanka.bib
+csl: harvard1.csl
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    theme: united
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+highlight: pygments
+---
+
+# Point pattern analyses #
+
+```{r setup, eval=TRUE, echo=FALSE}
+setwd("/media/daniel/homebay/Teachings/WS_2015-2016/Statistics_SriLanka/")
+library(raster)
+```
+
+_THE_ references for this subject are:
+
+- [@bivand2008]
+- [@baddeley2008]
+- [@diggle2013]
+
+And the best thing is: the authors are active developers of `R`. The package we will use in this topic very often is `spatstat`. A package that powerful that the manual alone has over 1400 pages (as of 2015-09-26).
+
+If you use the package in your research, do not forget to cite it (this holds true for every package used, including the base software `R`):
+
+```{r}
+library(spatstat)
+citation(package = "spatstat")
+```
+
+[following text largely from Knitter & Nakoinz (submitted)]
+
+Point patterns are the result of processes that are influenced by (a) first-order effects, i.e. the location of the point is influenced by the underlying structure of the area but not by the location of other points [@wiegand2004, 210]; (b) second-order effects that occur when the location of a point is influenced by the presence or absence of other points [@wiegand2004, 210]. Point pattern analyses are common in ecological studies [e.g. @legendre2012; @wiegand2013]; up to now there are only few applications in archaeological contexts [e.g. @knitter2014].
+
+## Warm up - some exploratory calculations ##
+
+### Data preparation ###
+
+Load shapefiles and create point dataset of the city polygons.
+
+```{r data, eval=TRUE, echo=TRUE}
+library(rgdal)
+boundary <- readOGR(dsn = "./data/DSL250-Shp/", layer = "Boundary")
+cities <- readOGR(dsn = "./data/DSL250-Shp", layer = "Cities")
+
+library(rgeos)
+cities.p <- gCentroid(cities, byid = TRUE)
+
+par(mfrow = c(1,2))
+plot(boundary)
+plot(cities, add=TRUE)
+plot(boundary)
+plot(cities.p, add=TRUE)
+```
+
+### Mean center and standard distance ###
+
+```{r mc-sd}
+
+## prepare the data
+x.co <- cities.p@coords[,1]
+y.co <- cities.p@coords[,2]
+n <- length(cities.p@coords[,1])
+
+## calculate mean center
+mc <- SpatialPoints(coords = cbind(sum(x.co)/n,sum(y.co)/n), proj4string = cities.p@proj4string)
+mc
+
+## calculate standard distance
+sd <- sqrt(sum((x.co-mean(x.co))^2+(y.co-mean(y.co))^2)/n)
+sd
+
+## plot it
+plot(boundary)
+points(cities.p, pch = 19, cex = .5)
+points(mc, col="red", pch = 19)
+library(plotrix)
+draw.circle(x = mc@coords[,1], y = mc@coords[,2], radius = sd, border = "red")
+title("Mean center and standard distance \nof cities.p in Sri Lanka")
+```
+
+### Global intensity
+
+```{r gintensity}
+## get Area of Sri Lanka and change it to sqkm
+area <- gArea(boundary)
+area <- area/1000000
+
+## calculate intensity
+intensity <- length(cities.p)/area
+intensity
+```
+
+> Exercise: what about the villages?!
+>
+> 1. Calculate mean centre and standard distance for the village dataset.
+> 2. Plot the results
+> 3. Calculate the global intensity of the village dataset. What does the value mean?
+
+```{r ex1, eval=FALSE, echo=FALSE}
+vil <- readOGR(dsn = "./data/DSL250-Shp/", layer = "Villname")
+plot(vil)
+
+mc2 <- SpatialPoints(coords = cbind(sum(vil@coords[,1])/length(vil),sum(vil@coords[,2])/length(vil)), proj4string = vil@proj4string)
+mc2
+
+sd2 <- sqrt(sum((vil@coords[,1]-mean(vil@coords[,1]))^2+(vil@coords[,2]-mean(vil@coords[,2]))^2)/length(vil))
+sd2
+
+plot(boundary)
+points(vil, pch = 3, cex = .5)
+points(mc, col="red", pch = 19, cex=2)
+points(mc, col="blue", pch = 19)
+library(plotrix)
+draw.circle(x = mc@coords[,1], y = mc@coords[,2], radius = sd, border = "red")
+draw.circle(x = mc2@coords[,1], y = mc2@coords[,2], radius = sd2, border = "blue")
+title("Mean center and standard distance \nof cities.p (red) and villages (blue) in Sri Lanka")
+
+area <- gArea(boundary)
+area <- area/1000000
+
+intensity2 <- length(vil)/area
+intensity2
+```
+
+## Working with `ppp` objects -- Conducting Point Pattern Analysis ## 
+
+First, let us create the point pattern. 
+
+```{r create_pp}
+## another window -- when "boundary" is too detailed
+# library(mapdata)
+# sl <- map("worldHires","Sri Lanka")
+# sl <- data.frame(x=sl$x,y=sl$y)
+# sl <- sl[is.na(sl$x)==FALSE & is.na(sl$y)==FALSE,]
+# sl.owin <- owin(poly = sl)
+# plot(sl.owin) ## quite rough, i know... but it's fast
+
+library(spatstat)
+library(maptools)
+sl.owin <- as.owin.SpatialPolygons(unionSpatialPolygons(boundary, IDs = boundary@data$OUTERB_ID))
+pp.cit <- ppp(x = cities.p@coords[,1], y = cities.p@coords[,2], window = sl.owin)
+#str(pp.cit)
+pp.vil <- ppp(x = vil@coords[,1], y = vil@coords[,2], window = sl.owin)
+
+#plot(pp.vil, pch = 3, cex = .5)
+plot(pp.cit, pch = 19, cols = "red")
+```
+
+As you can see the plot of `pp.cit` already shows the boundary of Sri Lanka. Why? And: why is this important? (hint: `?owin`)
+
+### Quadrat count
+
+```{r qc}
+qc.cit <- quadratcount(X = pp.cit)
+qc.vil <- quadratcount(X = pp.vil)
+
+par(mfrow = c(1,2))
+plot(qc.cit)
+plot(qc.vil)
+```
+
+So the question is: does the quadratcount indicates CSR? To check we use a $\chi^2$ test approach (remember: Relation between observed (i.e. empirical) and expected (i.e. theoretical, here CSR) amounts of points in quadrants)
+
+```{r qt}
+qt.cit <- quadrat.test(X = pp.cit)
+qt.cit
+qt.vil <- quadrat.test(X = pp.vil)
+qt.vil
+
+# par(mfrow = c(1,2))
+# plot(qt.cit)
+# plot(qt.vil)
+```
+
+> **Exercise:** 
+> 
+> What influence does a change in the amount and density of the quadrants have? Is the current approach useful? 
+
+### Nearest-neighbor distance
+
+```{r nn}
+nn.cit <- nndist(X = pp.cit)
+nn.vil <- nndist(X = pp.vil)
+
+str(nn.cit)
+
+mean(nn.cit)
+mean(nn.vil)
+
+hist(nn.cit)
+abline(v=mean(nn.cit))
+abline(v=median(nn.cit), lty=2)
+
+hist(nn.vil)
+abline(v=mean(nn.vil))
+abline(v=median(nn.vil), lty=2)
+```
+
+### Nearest neighbor Distance -- Clark and Evans’ R
+
+"An R value of less than 1 indicates of a tendency toward clustering, since it shows that observed nearest neighbor distances are shorter than expected. An R value of more than 1 indicatives of a tendency toward evenly spaced events" (O'Sullivan & Unwin 2010, 144) 
+
+```{r clarkevans}
+nnE <- 1/(2*sqrt((pp.vil$n/gArea(boundary))))
+nnE
+R.vil <- mean(nn.vil)/nnE
+R.vil
+
+nnE <- 1/(2*sqrt((pp.cit$n/gArea(boundary))))
+nnE
+R.cit <- mean(nn.cit)/nnE
+R.cit
+```
+
+## First order effects ##
+
+### Density calculation - 1st approach ###
+
+Amount of events within pixel...in imprecise language: a histogram in space. This is a step by step example but the code is rather inefficient. 
+
+```{r density1}
+cs <- 50000    # cellsize
+# enlarge the study area by ONE pixel (in E-W and N-S direction)
+xmin <- pp.cit$window$xrange[1] - cs/2 # enlarge the study area by cs/2
+xmax <- pp.cit$window$xrange[2] + cs/2 # enlarge the study area by cs/2
+ymin <- pp.cit$window$yrange[1] - cs/2 # enlarge the study area by cs/2
+ymax <- pp.cit$window$yrange[2] + cs/2 # enlarge the study area by cs/2
+rows  <- round((ymax-ymin)/cs, 0) + 1 # calculate the number of rows (add 1 just because a pixl might get lost through the rounding operation)
+columns <- round((xmax-xmin)/cs, 0) + 1 # calculate the number of columns (add 1 just because a pixl might get lost through the rounding operation)
+z <- cbind(1:(columns*rows)) # create a vector with all grid cells
+df <- data.frame(z) # create a data.frame of it
+gt <- GridTopology(c(pp.cit$window$xrange[1] - cs/2,pp.cit$window$yrange[1] - 
+                     cs/2), c(cs,cs), c(columns,rows)) # create a topological description of a grid and aftecsards...
+gt # ...have a look at it and...
+sgdf <- SpatialGridDataFrame(gt, df, proj4string = cities.p@proj4string) # ...create the grid.
+
+for (i in seq(along=coordinates(gt)[,1])){ # loop for every cell
+    x <- coordinates(gt)[i,1] - cs/2 # because the coordinate is define for the center of the cell, the half cellsize is substracted
+    y <- coordinates(gt)[i,2] - cs/2 # because the coordinate is define for the center of the cell, the half cellsize is substracted
+    xi <- which(pp.cit$x>x & pp.cit$x<x+cs) # which events lie within the x direction?
+    yi <- which(pp.cit$y>y & pp.cit$y<y+cs) # which events lie within the y direction? 
+    pz <- length(intersect(xi,yi)) # how many objects in x and y direction intersect?
+    sgdf@data$z[i]<- pz / (cs/1000)^2  # divide the number of points by the area
+}
+
+plot(raster(sgdf), col = gray.colors(25, start = 0.97, end = 0.4))      
+plot(boundary, add=TRUE)
+points(pp.cit$x, pp.cit$y, pch=16, cex=0.4)  
+```
+
+
+### Density calculation - 2nd approach ###
+
+Kernel density estimation; again here performed step by step and rather inefficiently coded. Use it to understand but do not run the code. 
+
+```{r density2}
+sgdf_kde <- sgdf # copy the grid into a new variable
+sd <- 100000 # define the bandwidth of the kernel - it is NOT the pixel size; this is defined in the beginning of the 1str approach
+# ...and think of it, the bandwidth shall not be smaller than the pixelsize, cause points outside the kernel are "underestimated"
+
+for (i in seq(along=coordinates(gt)[,1])){ # loop through all pixel
+    x <- coordinates(gt)[i,1]
+    y <- coordinates(gt)[i,2]
+    g2 <- 0
+    for (j in seq(along=pp.cit$x)){ # we use ALL points
+        distanz <- sqrt((pp.cit$x[j] - x)^2 + (pp.cit$y[j] - y)^2) # calculate this distance of one point to the centre of the raster cell. this is necessary for the...
+        g1 <- dnorm(distanz, mean=0, sd=sd) #...weighting of point in th e cell using a normal distributed kernel
+        g2 <- g2 + g1 # now collect the weights for the different points under in the pixel to get the density value for the pixel
+    }
+    sgdf_kde@data$z[i]<- g2     
+}
+plot(raster(sgdf_kde), col = gray.colors(25, start = 0.97, end = 0.4))   
+plot(boundary, add=TRUE)
+points(pp.cit$x, pp.cit$y, pch=16, cex=0.4) 
+```
+
+### Density calculation - 3rd approach ###
+
+Kernel density estimation using the built in function of `spatstat`. Since the package is great, it is perfectly coded and fast. Play around with the values. Calculate also a KDE for the village data set. 
+
+```{r density3}
+cs <- 1000  
+sd <- 50000
+
+dens_r5 <- density(pp.cit, sd, eps=cs, edge=TRUE, at="pixels") 
+plot(dens_r5, col = gray.colors(25, start = 0.97, end = 0.4))
+#contour(dens_r5, add=T)    
+points(pp.cit$x, pp.cit$y, pch=16, cex=0.4)  
+
+# use another measure for sd - in this case three times the mean nearest neighbor distance
+sdev <- 3*mean(nndist(pp.cit))  
+dens_r6 <- density(pp.cit, sdev, eps=cs, edge=TRUE, at="pixels")
+plot(dens_r6, col = gray.colors(25, start = 0.97, end = 0.4))
+#contour(dens_r6, add=T)    
+points(pp.cit$x, pp.cit$y, pch=16, cex=0.4)  
+```
+
+> **Exercise**
+>
+> 1. Use the `density` function to calculate the KDE for the village data set. 
+> 2. Change the size of the kernel and interpret/discuss the results
+> 3. Get familiar with the function and concepts using the `spatstat` manual
+
+## Second order effects ##
+
+### G and F function
+
+First approach based on theoretical assumptions, i.e. CSR
+
+```{r GF1}
+g.cit <- Gest(pp.cit)
+plot(g.cit)
+
+f.cit <- Fest(pp.cit)
+plot(f.cit)
+```
+
+Second approach based on simulations of a theortical process, i.e. CSR
+
+```{r GF2}
+g.cit.env <- envelope(pp.cit, fun = Gest, nsim = 10)
+plot(g.cit.env)
+
+f.cit.env <- envelope(pp.cit, fun = Fest, nsim = 10)
+plot(f.cit.env)
+```
+
+> **Question:** Interpret the results. Why two approaches? What are the advantages?
+
+### K and L function
+
+First approach based on theoretical assumptions, i.e. CSR
+
+```{r kl1}
+k.cit <- Kest(pp.cit)
+plot(k.cit)
+
+l.cit <- Lest(pp.cit)
+plot(l.cit)
+```
+
+Second approach based on simulations of a theortical process, i.e. CSR
+
+```{r kl2}
+k.cit.env <- envelope(pp.cit, fun = Kest, nsim = 10)
+plot(k.cit.env)
+
+l.cit.env <- envelope(pp.cit, fun = Lest, nsim = 10)
+plot(l.cit.env)
+```
+
+> **Question:** Interpret the results. Why two approaches? What are the advantages?
+
+> **Exercise**
+>
+> 1. Calculate G,F,K, and L function for the village data set
+> 2. Interpret the results. Which approach do you chose? Why?
+> 3. Get familiar with the function and concepts using the `spatstat` manual
+
+# References #
+

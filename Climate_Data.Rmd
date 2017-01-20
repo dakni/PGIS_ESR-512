@@ -1,0 +1,171 @@
+---
+title: Working with Climate Data
+author:
+- ESR 512 - GIS in Geostatistics
+- Postgraduate Institute of Science
+- University of Peradeniya
+- Thusitha Wagalawatta & Daniel Knitter
+date: 10/2015
+email: daniel.knitter@fu-berlin.de
+bibliography: Course_Statistics_SriLanka.bib
+csl: harvard1.csl
+output:
+  html_document:
+    toc: false
+    theme: united
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+  pdf_document:
+    toc: false
+    toc_depth: 2
+    number_sections: true
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+highlight: pygments
+---
+
+
+## Climate data ##
+```{r setup, eval=TRUE, echo=FALSE}
+setwd("/media/daniel/homebay/Teachings/WS_2015-2016/Statistics_SriLanka/")
+
+##https://ropensci.org/blog/2014/03/13/rnoaa/
+## library(rnoaa)
+## options(noaakey = "jlufSGYcMMPcKsETXKorwWaIVeaQgwic")
+
+## out <- ncdc(datasetid = "GHCND", stationid = "GHCND:USW00014895", datatypeid = "PRCP",startdate = "2010-05-01", enddate = "2010-10-31")
+
+
+```
+
+```{r start-climate, eval=TRUE, echo=TRUE}
+
+## FAO
+## http://geonetwork3.fao.org/climpag/agroclimdb_en.php
+
+temp <- read.csv("./data/fao_sl_temp.csv", header = TRUE)
+temp$DATE <- as.Date(temp$DATE)
+#str(temp)
+#head(temp)
+temp <- temp[complete.cases(temp)==TRUE,]
+#str(temp)
+
+library(chron)
+temp$YEAR <- years(as.chron(temp$DATE))
+temp$MONTH <- months(as.chron(temp$DATE))
+temp.y <- split(temp, temp$YEAR)
+temp.m <- split(temp, temp$MONTH)
+#str(temp.y)
+#str(temp.m)
+
+library(plyr)
+temp.mean <- lapply(temp.y, FUN = function(x){ddply(x, c("NAME", "LATITUDE", "LONGITUDE"),
+                                              summarise,
+										      N = length(VALUE),
+											  MEAN = mean(VALUE))}
+                 )
+
+#str(temp.mean)
+#head(temp.mean)
+
+temp.mean <- lapply(temp.mean, FUN = function(x){x[x$N==12,]})
+#temp.mean
+
+temp.mean.m <- lapply(temp.m, FUN = function(x){ddply(x, c("NAME", "LATITUDE", "LONGITUDE","YEAR"),
+                                                summarise,
+												N = length(VALUE),
+												MEAN = mean(VALUE))}
+                 )
+
+#str(temp.mean.m)
+#head(temp.mean.m)
+
+temp.mean.m <- lapply(temp.mean.m, FUN = function(x) {ddply(x, c("NAME", "LATITUDE", "LONGITUDE"),
+                                                      summarise, mean_temp = mean(MEAN))})
+
+#str(temp.mean.m)
+#head(temp.mean.m)
+
+sl.mean.temp <- ldply(temp.mean.m, data.frame)
+#str(sl.mean.temp)
+#head(sl.mean.temp)
+sl.mean.temp$.id <- as.factor(sl.mean.temp$.id)
+
+ggplot(sl.mean.temp, aes(x=.id, y=mean_temp, group=NAME, col = NAME)) +
+        geom_line() +
+            geom_point()
+
+
+prc <- read.csv("./data/fao_sl_prc.csv", header = TRUE)
+prc$DATE <- as.Date(prc$DATE)
+#head(prc)
+prc <- prc[complete.cases(prc)==TRUE,]
+#str(prc)
+
+library(chron)
+prc$YEAR <- years(as.chron(prc$DATE))
+prc$MONTH <- months(as.chron(prc$DATE))
+prc.y <- split(prc, prc$YEAR)
+prc.m <- split(prc, prc$MONTH)
+
+#str(prc.y)
+#str(prc.m)
+
+library(plyr)
+prc.sum <- lapply(prc.y, FUN = function(x){ddply(x, c("NAME", "LATITUDE", "LONGITUDE"), summarise,
+                 N = length(VALUE),
+                 sum = sum(VALUE))}
+                 )
+
+#str(prc.sum)
+#head(prc.sum)
+
+prc.sum <- lapply(prc.sum, FUN = function(x){x[x$N==12,]})
+#prc.sum
+
+prc.sum.m <- lapply(prc.m, FUN = function(x){ddply(x, c("NAME", "LATITUDE", "LONGITUDE","YEAR"),
+                                             summarise,
+                                             N = length(VALUE),
+                                             sum = sum(VALUE))}
+                                             )
+
+#str(prc.sum.m)
+#head(prc.sum.m)
+
+prc.sum.m <- lapply(prc.sum.m, FUN = function(x) {ddply(x, c("NAME", "LATITUDE", "LONGITUDE"),
+                                                  summarise, mean_prc = mean(sum))})
+
+#str(prc.sum.m)
+#head(prc.sum.m)
+
+sl.mean.prc <- ldply(prc.sum.m, data.frame)
+#str(sl.mean.prc)
+#head(sl.mean.prc)
+sl.mean.prc$.id <- as.factor(sl.mean.prc$.id)
+
+ggplot(sl.mean.prc, aes(x=.id, y=mean_prc, group=NAME, col = NAME)) +
+    geom_line() +
+	geom_point()
+
+
+.
+
+## test wether the places from the two data sets are the same
+sl.mean.temp$NAME %in% sl.mean.prc$NAME
+
+cl.stat <- SpatialPointsDataFrame(coords = cbind(sl.mean.temp$LONGITUDE, sl.mean.temp$LATITUDE),
+                                  data = data.frame(NAME = sl.mean.temp$NAME),
+								  proj4string = CRS("+init=epsg:4326"))
+cl.stat <- remove.duplicates(cl.stat)
+
+library(mapdata)
+
+map("worldHires", regions = "Sri Lanka")
+points(cl.stat, pch = 19)
+map.axes()
+title("Cities with climate data available at FAO ")
+```

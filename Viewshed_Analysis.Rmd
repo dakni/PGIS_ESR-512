@@ -1,0 +1,152 @@
+---
+title: Viewshed Analyses
+author:
+- ESR 512 - GIS in Geostatistics
+- Postgraduate Institute of Science
+- University of Peradeniya
+- Thusitha Wagalawatta & Daniel Knitter
+date: 10/2015
+email: daniel.knitter@fu-berlin.de
+bibliography: Course_Statistics_SriLanka.bib
+csl: harvard1.csl
+output:
+  html_document:
+    toc: false
+    theme: united
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+  pdf_document:
+    toc: false
+    toc_depth: 2
+    number_sections: true
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+highlight: pygments
+---
+
+```{r setup, eval=TRUE, echo=FALSE}
+setwd("/media/daniel/homebay/Teachings/WS_2015-2016/Statistics_SriLanka/")
+```
+
+## Viewshed Analysis ##
+
+Be aware, for the following to work you need to have GRASS GIS installed on your system.
+
+Load library, initialize the GRASS environment with default values (everything is stored as temporary files; you can change this if you want to come back to earlier stages of your work)
+
+```{r init_grass, eval = TRUE, echo = TRUE}
+library(spgrass6)
+loc <-  initGRASS("/usr/local/grass-7.0.0svn/", home=tempdir() ,mapset = "PERMANENT", override = TRUE)
+execGRASS("g.proj", flags = c("c"), parameters = list(proj4="+init=epsg:32644"))
+
+library(rgdal)
+srtm <- readGDAL("./results/srtm.tif")
+writeRAST6(x = srtm, vname="dem", flags = c("overwrite"))
+## adjust Regions resolution!
+execGRASS("g.region", parameters = list(raster = "dem",res = as.character(srtm@grid@cellsize[1])))
+execGRASS("g.region", flags = c("p"))
+```
+
+Now we are ready to perform our viewshed analysis. 
+
+```{r eval = TRUE, echo = TRUE}
+# display the possible commands in grass
+parseGRASS("r.viewshed")
+```
+
+Let us create viewshed maps for the peak data
+
+```{r eval = TRUE}
+peaks <- readOGR("./data/DSL250-Shp", "Peaks")
+library(raster)
+peaks <- spTransform(peaks, raster(srtm)@crs)
+
+## for better orientation insert the boundary
+boundary <- readOGR("./data/DSL250-Shp", "Boundary")
+boundary <- spTransform(boundary, raster(srtm)@crs)
+```
+
+```{r eval = TRUE, results="hide", warning = FALSE}
+plot(boundary)
+points(peaks, pch = 19, cex = .5)
+
+## crop srtm to be relevant for dagoba data
+# srtm_crop <- crop(raster(srtm), rbind(c(min(dagoba@bbox[1,]-10000),
+#                                 max(dagoba@bbox[1,]+10000)),
+#                               c(min(dagoba@bbox[2,]-10000),
+#                                 max(dagoba@bbox[2,]+10000))
+#                               ))		
+
+srtm_crop <- raster(srtm)
+writeRAST6(x = as(srtm_crop,"SpatialGridDataFrame"), vname="dem_crop", flags = c("overwrite"))
+execGRASS("g.region", parameters = list(raster = "dem_crop"))
+
+## viewshed for one point
+co.peaks <- peaks@coords
+execGRASS("r.viewshed", flags = c("overwrite","b"), parameters = list(input = "dem_crop",output = "view.peak",coordinates = co.peaks[1,]))
+single.viewshed <- readRAST6("view.peak")
+plot(raster(single.viewshed))
+points(peaks[1,])
+```
+
+> **Question** 
+> What might be wrong with this result?
+
+```{r eval = TRUE, results="hide", warning = FALSE}
+execGRASS("r.viewshed", flags = c("overwrite","b"), parameters = list(input = "dem_crop",output = "view.peak",coordinates = co.peaks[1,], max_distance=50000))
+single.viewshed <- readRAST6("view.peak")
+plot(raster(single.viewshed))
+points(peaks[1,],pch=19)
+```
+
+
+```{r view_loop, eval=TRUE, results="hide", warning = FALSE}
+## viewshed for all points
+## ------------------------------
+## load basic raster from grass
+dem_crop <- readRAST6(vname = "dem_crop")
+
+## loop through all points, calculate viewshed, and write in a an raster brick object
+cum.view.peaks <- brick(raster(dem_crop))
+
+for (i in seq(1, length(co.peaks[,1]))) {
+    execGRASS("r.viewshed"
+              ,flags = c("overwrite","b")
+              ,parameters = list(input = "dem_crop",
+                                 output = "view.peak",
+                                 coordinates = co.peaks[i,],
+                                 max_distance=75000)
+              )
+    viewshed <- readRAST6("view.peak")
+    cum.view.peaks[[i]] <- raster(viewshed)
+  	names(cum.view.peaks[[i]]) <- as.character(peaks$NAME[i])
+    cat("iteration ", i, " of ", length(co.peaks[,1]),"\n")
+}
+
+plot(cum.view.peaks)
+
+view.sum.peaks <- sum(cum.view.peaks)
+plot(view.sum.peaks)
+
+quantile(view.sum.peaks)
+##   0%  25%  50%  75% 100% 
+##   0    0    1   2  9 
+##   1    2    3   4   5
+rcl.peaks <- c(-Inf, quantile(view.sum.peaks)[2],1,
+         quantile(view.sum.peaks)[2],quantile(view.sum.peaks)[3],2,
+         quantile(view.sum.peaks)[3],quantile(view.sum.peaks)[4],3,
+         quantile(view.sum.peaks)[4],quantile(view.sum.peaks)[5],4,
+         quantile(view.sum.peaks)[5],+Inf,5
+         )
+rcl.peaks <- matrix(rcl.peaks, ncol = 3, byrow = TRUE)
+view.sum.peaks2 <- reclassify(x = view.sum.peaks, rcl = rcl.peaks)
+plot(view.sum.peaks2)
+points(peaks, pch=19, cex=.5)
+
+#library(rasterVis)
+#levelplot(view.sum.peaks2)
+```

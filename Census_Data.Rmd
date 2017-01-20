@@ -1,0 +1,422 @@
+---
+title: Working with Census Data
+author:
+- ESR 512 - GIS in Geostatistics
+- Postgraduate Institute of Science
+- University of Peradeniya
+- Thusitha Wagalawatta & Daniel Knitter
+date: 10/2015
+email: daniel.knitter@fu-berlin.de
+bibliography: Course_Statistics_SriLanka.bib
+csl: harvard1.csl
+output:
+  html_document:
+    toc: false
+    theme: united
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+  pdf_document:
+    toc: false
+    toc_depth: 2
+    number_sections: true
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+highlight: pygments
+---
+
+
+## Census data ##
+```{r setup, eval=TRUE, echo=FALSE}
+setwd("/media/daniel/homebay/Teachings/WS_2015-2016/Statistics_SriLanka/")
+```
+
+First, we load the shapefile `Divsec` whose attributes contains the administrative areas on different levels for Sri Lanka.
+
+```{r district_shp, eval=TRUE, echo=TRUE}
+## load district shapfile
+library(rgdal)
+distr <- readOGR(dsn = "./data/DSL250-Shp/", layer = "Divsec")
+plot(distr)
+```
+Since most of the data provided by LankaSIS is on the district level, we need to merge the present aggregation scheme on the district level. 
+
+```{r distr_aggregate, eval=TRUE, echo=TRUE}
+### solutions (see also: to http://gis.stackexchange.com/questions/63577/joining-polygons-in-r
+dist.coords <- coordinates(distr)
+
+# Generate IDs for grouping
+distr.id <- distr@data$DISTRICT #cut(distr.coords[,1], quantile(distr.coords[,1]), include.lowest=TRUE)
+
+# Merge polygons by ID
+library(maptools)
+distr.union <- unionSpatialPolygons(distr, distr.id)
+
+## Plotting - option 1
+par(mfrow = c(1,2))
+plot(distr)
+plot(distr.union)
+
+## Plotting - option 2
+## plot(distr)
+## plot(distr.union, add = TRUE, border = "red", lwd = 2)
+
+# Convert SpatialPolygons to data frame
+distr.df <- as(distr, "data.frame")
+
+## small function to find the mode
+simpleMode <- function(x) {
+	return(x[which.max(tabulate(x))])
+	}
+
+# Aggregate and sum desired data attributes by ID list
+distr.df.agg <- aggregate(distr.df[, 5], list(distr.id), FUN = simpleMode)
+row.names(distr.df.agg) <- as.character(distr.df.agg$Group.1)
+head(distr.df.agg)
+
+# Reconvert data frame to SpatialPolygons
+distr.shp.agg <- SpatialPolygonsDataFrame(distr.union, distr.df.agg)
+
+# Plotting
+#library(gridExtra)
+#grid.arrange(spplot(distr, "DISTRICT", main = "Distr: original county area"), 
+#             spplot(distr.shp.agg, "Group.1", main = "Distr: aggregated county area"), ncol = 1)
+
+str(distr.shp.agg@data)
+names(distr.shp.agg@data) <- c("DISTRICT","PROVINCE")
+
+writeOGR(distr.shp.agg, dsn = "./results/", layer = "districts", driver = "ESRI Shapefile", overwrite=TRUE)
+
+```
+
+
+```{r start-census, eval=TRUE, echo=TRUE}
+## population by sector and district
+## http://sis.statistics.gov.lk/statHtml/statHtml.do?orgId=144&tblId=DT_POP_SER_265&conn_path=I2
+pop <- read.table(file = "./data/Pop.csv",
+	header = TRUE,
+	sep = ",", skip = 0, stringsAsFactors = FALSE)
+str(pop)
+
+## select entire population of districts and remove "Sri Lanka"
+pop <- pop[!pop$Sri.lanka.standard.classification.of.area=="Sri Lanka" & pop$Sex=="Both Sexes" & pop$Sector=="All sectors",]
+names(pop)[1] <- "DISTRICT"
+pop <- subset(x = pop, select = c("DISTRICT", "X1971", "X1981", "X2001", "X2012"))
+str(pop)
+head(pop)
+
+## fix the numbers
+for (i in 2:5) {
+    pop[,i] <- as.numeric(gsub(pattern = ",",replacement = "", x=pop[,i],fixed = TRUE))
+}
+
+## sort the census data
+pop <- pop[order(pop$DISTRICT),]
+##convert text so that it matches the shapefile
+pop$DISTRICT <- toupper(pop$DISTRICT)
+
+distr.shp.agg$DISTRICT %in% pop$DISTRICT
+pop$DISTRICT[(distr.shp.agg$DISTRICT %in% pop$DISTRICT)==FALSE]
+distr.shp.agg$DISTRICT[(distr.shp.agg$DISTRICT %in% pop$DISTRICT)==FALSE]
+pop$DISTRICT[(distr.shp.agg$DISTRICT %in% pop$DISTRICT)==FALSE] <- as.character(distr.shp.agg$DISTRICT[(distr.shp.agg$DISTRICT %in% pop$DISTRICT)==FALSE])
+
+
+library(dplyr)
+distr.shp.agg@data <- left_join(distr.shp.agg@data, pop)
+
+## plot choropleht map
+## --------------------------------------------------
+## https://cran.r-project.org/web/packages/tmap/vignettes/tmap-nutshell.html
+## https://cran.r-project.org/web/packages/tmap/tmap.pdf
+## install.packages("tmap", dependencies = TRUE)
+library(tmap)
+
+## quick plot
+qtm(distr.shp.agg, fill="X2001")
+
+## detailed plot
+tm_shape(distr.shp.agg) +
+    tm_fill("X2012", textNA="no data", title="Population 2012") +
+    tm_text("DISTRICT", size= .5) +
+    tm_borders() +
+tm_layout(title = "Population Sri Lanka")
+
+
+## Plot population development as Graph
+## --------------------------------------------------
+library(ggplot2)
+a <- distr.shp.agg@data
+
+library(reshape)
+b <- melt(a, id.vars = c("PROVINCE", "DISTRICT"), measure.vars = c("X1971","X1981","X2001","X2012"))
+str(b)
+b$value <- b$value/1000
+levels(b$variable) <- c("1971","1981","2001","2012")
+
+ggplot(data = b, aes(x = variable, y = value, group = DISTRICT, col = DISTRICT)) +
+    geom_line() +
+    geom_point() +
+    facet_grid(. ~ PROVINCE) +
+    labs(title = "Population development Sri Lanka",
+         x = "Census Year",
+         y = "Population in thousands") +
+    guides(col=guide_legend(nrow=5, keyheight=.5, keywidth=.5)) +
+    theme(legend.position = "bottom",
+	      text = element_text(size=10),
+		  legend.text = element_text(size=8))
+
+
+```
+
+**Exercises**
+
+1. Create maps for the population of the different provinces of Sri Lanka.
+
+Tasks to perform:
+- data aggregation
+- Polygon union
+- Plotting
+
+2. Which province has the highest population standard deviation? Calculate and map your results.
+
+3. Is there a significant difference between the sexes in the different districts? Calculate and map your results.
+
+
+
+```{r census-sex, echo=TRUE, eval=TRUE}
+
+pop <- read.table(file = "./data/Pop.csv",
+	header = TRUE,
+	sep = ",", skip = 0, stringsAsFactors = FALSE)
+str(pop)
+pop <- pop[!pop$Sri.lanka.standard.classification.of.area=="Sri Lanka" & !pop$Sex=="Both Sexes" & pop$Sector=="All sectors",]
+names(pop)[1] <- "DISTRICT"
+pop <- subset(x = pop, select = c("DISTRICT", "Sex","X1971", "X1981", "X2001", "X2012"))
+str(pop)
+
+## fix the numbers
+for (i in 3:6) {
+    pop[,i] <- as.numeric(gsub(pattern = ",",replacement = "", x=pop[,i],fixed = TRUE))
+}
+
+head(pop)
+
+
+##  Poverty head count ratio (%) by Province and District (Poverty Head Count Ratio)
+## http://sis.statistics.gov.lk/statHtml/statHtml.do?orgId=144&tblId=DT_LSS_POV_101&conn_path=I2
+poverty <- read.table(file = "./data/poverty.csv", header = TRUE, sep = ",", skip = 0, stringsAsFactors = FALSE)
+str(poverty)
+str(pop)
+
+## sex ratio
+pop$X2012[pop$Sex=="Male"]/pop$X2012[pop$Sex=="Female"]
+
+## is poverty and sex ratio related?
+plot(pop$X2012[pop$Sex=="Male"]/pop$X2012[pop$Sex=="Female"], poverty$X2013)
+cor(pop$X2012[pop$Sex=="Male"]/pop$X2012[pop$Sex=="Female"], poverty$X2013)
+
+## is the distribution of sexes significantly different?
+
+
+
+## does do ratio between the sexes change?
+str(pop)
+library(plyr)
+a <- pop[pop$DISTRICT=="Colombo",]
+a$X1971[2]
+
+sr <- ddply(pop, "DISTRICT", function(x) {
+                sr1 <- x$X1971[1]/x$X1971[2]
+                sr2 <- x$X1981[1]/x$X1981[2]
+                sr3 <- x$X2001[1]/x$X2001[2]
+                sr4 <- x$X2012[1]/x$X2012[2]
+                data.frame(sr.1971 = sr1,
+                           sr.1981 = sr2,
+                           sr.2001 = sr3,
+                           sr.2012 = sr4)
+            })
+
+str(sr)
+
+library(reshape)
+sr2 <- melt(sr, id.vars = c("DISTRICT"), measure.vars = c("sr.1971","sr.1981","sr.2001","sr.2012"))
+str(sr2)
+
+ggplot(sr2, aes(x=variable, y=value, group=DISTRICT, col=DISTRICT)) +
+    geom_line() +
+        geom_point() +
+            labs(title = "Sex-ratio development in Sri Lanka",
+         x = "Census Year",
+         y = "Sex ratio (Male/Female)") +
+    guides(col=guide_legend(nrow=5, keyheight=.5, keywidth=.5)) +
+    theme(legend.position = "bottom",
+	      text = element_text(size=10),
+		  legend.text = element_text(size=8))
+
+## Join with district data
+distr <- readOGR(dsn = "./results/", layer="districts")
+
+## sort the census data
+sr <- sr[order(sr$DISTRICT),]
+##convert text so that it matches the shapefile
+sr$DISTRICT <- toupper(sr$DISTRICT)
+sr
+
+distr$DISTRICT %in% sr$DISTRICT
+sr$DISTRICT[(distr$DISTRICT %in% sr$DISTRICT)==FALSE]
+distr$DISTRICT[(distr$DISTRICT %in% sr$DISTRICT)==FALSE]
+sr$DISTRICT[(distr$DISTRICT %in% sr$DISTRICT)==FALSE] <- as.character(distr$DISTRICT[(distr$DISTRICT %in% sr$DISTRICT)==FALSE])
+
+library(dplyr)
+distr@data <- left_join(distr@data, sr)
+str(distr@data)
+
+spplot(obj = distr, zcol = c("sr.1971","sr.1981","sr.2001","sr.2012"))
+
+
+## relation between sex ratio and mean elevation?
+## H: the higher the elevation, the more tee production, the more women working
+library(raster)
+srtm <- raster("./results/srtm.tif")
+distr@data$elev <- extract(x = srtm, y = distr, fun=mean, na.rm = TRUE)
+
+cor(distr@data$elev,distr@data$sr.2012)
+
+
+
+## Population by age group, sex, residential sector and district
+## http://sis.statistics.gov.lk/statHtml/statHtml.do?orgId=144&tblId=DT_POP_GEO_174&conn_path=I2
+## -> Pop 2001
+pop2 <- read.table(file = "./data/Pop2.csv", header = TRUE, sep = ",", skip = 0, stringsAsFactors = FALSE)
+str(pop2)
+pop2 <- pop2[2:67,]
+pop2$X2001 <- as.numeric(gsub(",","",pop2$X2001))
+pop2$X2012 <- as.numeric(gsub(",","",pop2$X2012))
+head(pop2)
+str(pop2)
+
+library(ggplot2)
+
+ggplot(pop2, aes(x=District,y=X2001, fill=Residential.sector)) +
+    geom_bar(stat = "identity") +
+        coord_flip()
+
+
+## Employed population by sex, province and district
+## http://sis.statistics.gov.lk/statHtml/statHtml.do?orgId=144&tblId=DT_LFE_EMP_101&conn_path=I2
+employed <- read.table(file = "./data/Employed_population.csv", header = TRUE, sep = ",", skip = 0, stringsAsFactors = FALSE)
+str(employed)
+employed$Male <- as.numeric(gsub(",","",employed$Male))
+employed$Female <- as.numeric(gsub(",","",employed$Female))
+names(employed)[2] <- "District"
+head(employed)
+
+library(reshape)
+employed2 <- melt(employed, id.vars = c("District","Period"),measure.vars = c("Male","Female"))
+str(employed2)
+names(employed2)[3:4] <- c("Sex","Employed")
+
+library(ggplot2)
+
+ggplot(employed2, aes(x=District,y=Employed, fill = Sex)) +
+    geom_bar(stat="identity") +
+        coord_flip()
+
+
+## Unemployment rate (%) by province and district
+## http://sis.statistics.gov.lk/statHtml/statHtml.do?orgId=144&tblId=DT_LFE_UNP_101&conn_path=I2
+unemployed <- read.table(file = "./data/Unemployment_rate.csv", header = TRUE, sep = ",", skip = 0, stringsAsFactors = FALSE)
+str(unemployed)
+tmp <- apply(X = unemployed[2:8], MARGIN = 2, FUN = function(x) {as.numeric(gsub(",","",x))})
+head(tmp)
+unemployed <- data.frame(DISTRICT = unemployed$Province.and.district, tmp)
+str(unemployed)
+
+library(reshape)
+unemployed2 <- melt(unemployed, id.vars = "DISTRICT", measure.vars = names(unemployed[,2:8]))
+str(unemployed2)
+names(unemployed2)[2:3] <- c("Year","Unemployed")
+head(unemployed2)
+
+library(ggplot2)
+
+ggplot(unemployed2, aes(x = Year, y = Unemployed, group = DISTRICT, col=DISTRICT)) +
+    geom_line() +
+        guides(col=guide_legend(nrow=5, keyheight=.5, keywidth=.5)) +
+            theme(legend.position = "bottom",
+          text = element_text(size=10),
+          legend.text = element_text(size=8))
+
+
+## Is there a significant difference in the employment of Male and Female?
+
+## propotion of males employed
+str(employed)
+m.e.2012 <- employed2[employed2$Sex=="Male" & employed2$Period==2012,]
+m.e.2012
+str(pop)
+
+library(reshape)
+pop.r <- melt(pop, id.vars = c("DISTRICT", "Sex"), measure.vars = names(pop[3:6]))
+str(pop.r)
+names(pop.r) <- c("DISTRICT","Sex","Year","Population")
+m.2012 <- pop.r[pop.r$Sex=="Male" & pop.r$Year=="X2012",]
+m.2012
+
+p.m.e.2012 <- data.frame(DISTRICT = m.e.2012[,1], pme = m.e.2012$Employed/m.2012$Population)
+p.m.e.2012
+
+## proportion of females employed
+str(employed)
+f.e.2012 <- employed2[employed2$Sex=="Female" & employed2$Period==2012,]
+f.e.2012
+
+f.2012 <- pop.r[pop.r$Sex=="Female" & pop.r$Year=="X2012",]
+f.2012
+
+p.f.e.2012 <- data.frame(DISTRICT = f.e.2012[,1], pfe = f.e.2012$Employed/f.2012$Population)
+p.f.e.2012 
+
+t.test(p.m.e.2012[,2],p.f.e.2012[,2]) #??
+
+
+## Employed population by level of education, sex, province and district
+## http://sis.statistics.gov.lk/statHtml/statHtml.do?orgId=144&tblId=DT_LFE_EMP_107&conn_path=I2
+une.edu <- read.table(file = "./data/Employed_population_edu.csv", header = TRUE, sep = ",", skip = 0, stringsAsFactors = FALSE)
+str(une.edu)
+tmp <- apply(X = une.edu[,4:5], MARGIN = 2, FUN = function(x) {as.numeric(gsub(",","",x))})
+head(tmp)
+une.edu <- data.frame(YEAR = une.edu$Period,
+                      DISTRICT = une.edu$Province.and.district,
+                      LoE = une.edu$Level.of.education,
+                      tmp)
+str(une.edu)
+
+library(reshape)
+une.edu2 <- melt(une.edu, id.vars = c("YEAR","DISTRICT","LoE"), measure.vars = c("Male","Female"))
+str(une.edu2)
+names(une.edu2)[4:5] <- c("Sex","num_employed")
+une.edu2[1,]
+
+ggplot(une.edu2, aes(x=Sex, y=num_employed, fill=Sex)) +
+    geom_bar(stat="identity") +
+        facet_grid(LoE ~ DISTRICT)
+
+## is employment rate linked to level of education?
+a <- cbind(une.edu2[une.edu2$DISTRICT==levels(une.edu2$DISTRICT)[20] & une.edu2$Sex=="Male" & une.edu2$YEAR==2012,5],
+           une.edu2[une.edu2$DISTRICT==levels(une.edu2$DISTRICT)[20] & une.edu2$Sex=="Female" & une.edu2$YEAR==2012,5]
+           )
+a
+dimnames(a) <- list("LoE"=levels(une.edu2$LoE),
+                    "Sex"=levels(une.edu2$Sex)
+                    )
+a
+#barplot(a, beside = TRUE)
+prop.table(a)
+chisq.test(a) #??
+
+
+```

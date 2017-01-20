@@ -1,0 +1,305 @@
+
+---
+title: Spatial autocorrelation
+author:
+- ESR 512 - GIS in Geostatistics
+- Postgraduate Institute of Science
+- University of Peradeniya
+- Thusitha Wagalawatta & Daniel Knitter
+date: 10/2015
+email: daniel.knitter@fu-berlin.de
+bibliography: Course_Statistics_SriLanka.bib
+csl: harvard1.csl
+output:
+  html_document:
+    toc: false
+    theme: united
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+  pdf_document:
+    toc: false
+    toc_depth: 2
+    number_sections: true
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+highlight: pygments
+---
+
+
+## ... ##
+```{r setup, eval=TRUE, echo=FALSE}
+setwd("/media/daniel/homebay/Teachings/WS_2015-2016/Statistics_SriLanka/")
+```
+
+```{r echo=FALSE, eval=FALSE}
+# library(rgdal)
+# districts <- readOGR("./results/","districts")
+# plot(districts)
+# str(districts@data)
+# 
+# ## Live births, maternal deaths, still births and low birth weight 
+# ## http://sis.statistics.gov.lk/statHtml/statHtml.do?orgId=144&tblId=DT_HEA_ANN_129&conn_path=I2
+# births <- read.table(file = "./data/births.csv",
+# 	header = TRUE,
+# 	sep = ",", skip = 0, stringsAsFactors = FALSE)
+# str(births)
+# births <- births[,c(2:9)]
+# births[,1] <- toupper(births[,1])
+# births.ma <- apply(births[,c(2,5)], MARGIN = 2, FUN = function(x){as.numeric(gsub(pattern = ",",replacement = "",x))})
+# head(births.ma)
+# births[,2] <- births.ma[,1]
+# births[,5] <- births.ma[,2]
+# head(births)
+# 
+# library(dplyr)
+# ## https://cran.r-project.org/web/packages/dplyr/vignettes/two-table.html
+# 
+# head(districts@data)
+# births <- births[with(births, order(District)), ]
+# names(births)[1] <- "DISTRICT"
+# head(births)
+# 
+# districts$DISTRICT %in% births$DISTRICT
+# births$District[(districts$DISTRICT %in% births$District)==FALSE]
+# districts$DISTRICT[(districts$DISTRICT %in% births$District)==FALSE]
+# births$District[(districts$DISTRICT %in% births$District)==FALSE] <- as.character(districts$DISTRICT[(districts$DISTRICT %in% births$District)==FALSE])
+# districts$DISTRICT %in% births$District
+# 
+# districts@data <- districts@data %>%
+#     left_join(births, by = "DISTRICT")
+# 
+# str(districts@data)
+# p1 <- spplot(districts,zcol=names(districts@data[c(6)]),main = "Still births 2012")
+# p2 <- spplot(districts,zcol=names(districts@data[c(7)]),main = "Still births rate 2012")
+# print(p1, position = c(0,0,.5,1), more = TRUE)
+# print(p2, position = c(.5,0,1,1))
+# 
+# ### !!!!!!!
+# districts@data[is.na(districts@data)==TRUE] <- 0
+# 
+# ##install.packages("spdep",dependencies = TRUE)
+# library(spdep)
+# 
+# coords <- coordinates(districts)
+# IDs <- row.names(as(districts, "data.frame"))
+# districts1_nb <- tri2nb(coords, row.names = IDs)
+# districts2_nb <- graph2nb(soi.graph(districts1_nb, coords), row.names = IDs)
+# districts3_nb <- graph2nb(gabrielneigh(coords), row.names = IDs)
+# districts4_nb <- graph2nb(relativeneigh(coords), row.names = IDs)
+# str(districts4_nb)
+# 
+# par(mfrow = c(2,2))
+# plot(districts, main = "Delaunay")
+# plot.nb(districts1_nb, coords = coords,add=TRUE)
+# plot(districts, main = "Sphere of Influence")
+# plot.nb(districts2_nb, coords = coords,add=TRUE)
+# plot(districts, main = "Gabriel")
+# plot.nb(districts3_nb, coords = coords,add=TRUE)
+# plot(districts, main = "Relative")
+# plot.nb(districts4_nb, coords = coords,add=TRUE)
+# 
+# districts5_nb <- knn2nb(knearneigh(coords, k = 5), row.names = IDs)
+# plot(districts, main = "K-nearest neighbour (k = 5)");plot.nb(districts5_nb, coords = coords,add=TRUE)
+# 
+# districts2.sw <- nb2listw(districts2_nb, style = "B",zero.policy = TRUE)
+# districts5.sw <- nb2listw(districts5_nb, style = "B",zero.policy = TRUE)
+# 
+# class(districts5.sw)
+# summary(districts5.sw)
+# 
+# districts5.mor <- moran.test(x=districts$Maternal.Deaths_No, listw = districts5.sw,zero.policy=TRUE, alternative = "two.sided")
+# districts5.mor
+# str(districts5.mor)
+# class(districts5.mor)
+# 
+# districts5.mor.mc <- moran.mc(x=districts$Maternal.Deaths_No, listw = districts5.sw,zero.policy=TRUE,nsim = 99)
+# 
+# districts5.mor.mc
+# 
+# tmp <- districts5.mor.mc$res[1:length(districts5.mor.mc$res)-1]
+# zz <- density(tmp)
+# plot(zz,main="Moran’s I Permutation Test",xlab="Reference Distribution",xlim=c(-0.3,0.7),ylim=c(0,6),lwd=2,col=2)
+# hist(tmp,freq=F,add=T)
+# abline(v=districts5.mor.mc$statistic,lwd=2,col=4)
+# 
+# moran.plot(x=districts$Maternal.Deaths_No, listw = districts5.sw)
+# 
+# plot(sp.correlogram(neighbours = poly2nb(districts), var = districts$Maternal.Deaths_No, order = 4,method = "I",style = "B"))
+
+```
+
+
+```{r poison, eval=TRUE, echo=TRUE}
+## Cases and deaths of poisonning and case fatality rate
+## http://sis.statistics.gov.lk/statHtml/statHtml.do?orgId=144&tblId=DT_HEA_ANN_112&conn_path=I2
+poison <- read.table(file = "./data/poison.csv",
+	header = TRUE,
+	sep = ",", skip = 0, stringsAsFactors = FALSE)
+str(poison)
+poison <- poison[,2:5]
+poison.names <- names(poison)
+poison.names
+names(poison) <- c("cd","DISTRICT","P","T")
+poison[,2] <- toupper(poison[,2])
+poison.ma <- apply(X = poison[,3:4], MARGIN = 2, FUN = function(x){as.numeric(gsub(",","",x))})
+poison.ma
+poison$P <- poison.ma[,1];poison$T <- poison.ma[,2]
+head(poison)
+
+poison.c <- poison[poison$cd=="Cases",2:4]
+names(poison.c)[2:3] <- c("CP","CT")
+head(poison.c)
+poison.d <- poison[poison$cd=="Deaths",2:4]
+names(poison.d)[2:3] <- c("DP","DT")
+head(poison.d)
+poison.c <- poison.c[with(poison.c, order(DISTRICT)),]
+poison.d <- poison.d[with(poison.d, order(DISTRICT)),]
+head(poison.c)
+
+
+library(rgdal)
+districts <- readOGR("./results/","districts")
+
+districts$DISTRICT %in% poison.c$DISTRICT
+poison.c$DISTRICT[(districts$DISTRICT %in% poison.c$DISTRICT)==FALSE]
+districts$DISTRICT[(districts$DISTRICT %in% poison.c$DISTRICT)==FALSE]
+poison.c$DISTRICT[(districts$DISTRICT %in% poison.c$DISTRICT)==FALSE] <- as.character(districts$DISTRICT[(districts$DISTRICT %in% poison.c$DISTRICT)==FALSE])
+districts$DISTRICT %in% poison.c$DISTRICT
+
+
+districts$DISTRICT %in% poison.d$DISTRICT
+poison.d$DISTRICT[(districts$DISTRICT %in% poison.d$DISTRICT)==FALSE]
+districts$DISTRICT[(districts$DISTRICT %in% poison.d$DISTRICT)==FALSE]
+poison.d$DISTRICT[(districts$DISTRICT %in% poison.d$DISTRICT)==FALSE] <- as.character(districts$DISTRICT[(districts$DISTRICT %in% poison.d$DISTRICT)==FALSE])
+districts$DISTRICT %in% poison.d$DISTRICT
+
+library(dplyr)
+districts@data <- districts@data %>%
+    left_join(poison.c, by = "DISTRICT")
+districts@data <- districts@data %>%
+    left_join(poison.d, by = "DISTRICT")
+str(districts@data)
+
+p1 <- spplot(districts,zcol=names(districts@data[3]),main = paste("Cases (2012) of \n",poison.names[3],sep = ""))
+p2 <- spplot(districts,zcol=names(districts@data[4]),main = paste("Cases (2012) of \n",poison.names[4],sep = ""))
+p3 <- spplot(districts,zcol=names(districts@data[5]),main = paste("Deaths (2012) of \n",poison.names[3],sep = ""))
+p4 <- spplot(districts,zcol=names(districts@data[6]),main = paste("Deaths (2012) of \n",poison.names[4],sep = ""))
+             
+print(p1, position = c(0,0,.5,1), more = TRUE) # position xmin, ymin, xmax, ymax
+print(p3, position = c(.5,0,1,1))
+
+print(p2, position = c(0,0,.5,1), more = TRUE)
+print(p4, position = c(.5,0,1,1))
+
+##install.packages("spdep",dependencies = TRUE)
+library(spdep)
+
+d.co <- coordinates(districts)
+IDs <- row.names(as(districts, "data.frame"))
+d.del <- tri2nb(d.co, row.names = IDs)
+d.soi <- graph2nb(soi.graph(d.del, d.co), row.names = IDs)
+d.gab <- graph2nb(gabrielneigh(d.co), row.names = IDs)
+d.rel <- graph2nb(relativeneigh(d.co), row.names = IDs)
+str(d.rel)
+
+par(mfrow = c(2,2))
+plot(districts, main = "Delaunay graph")
+plot.nb(d.del, coords = d.co,add=TRUE)
+plot(districts, main = "Sphere of influence graph")
+plot.nb(d.soi, coords = d.co,add=TRUE)
+plot(districts, main = "Gabriel graph")
+plot.nb(d.gab, coords = d.co,add=TRUE)
+plot(districts, main = "Relative neighbour graph")
+plot.nb(d.rel, coords = d.co,add=TRUE)
+
+d.k2 <- knn2nb(knearneigh(d.co, k = 2), row.names = IDs)
+d.k5 <- knn2nb(knearneigh(d.co, k = 5), row.names = IDs)
+d.d50k <- dnearneigh(d.co, d1=0, d2=50000, row.names = IDs)
+d.d200k <- dnearneigh(d.co, d1=0, d2=200000, row.names = IDs)
+
+par(mfrow = c(2,2))
+plot(districts, main = "K-nearest neighbour (k = 2)")
+plot.nb(d.k2, coords = d.co,add=TRUE)
+plot(districts, main = "K-nearest neighbour (k = 5)")
+plot.nb(d.k5, coords = d.co,add=TRUE)
+plot(districts, main = "Distance based neighbour (0-50km)")
+plot.nb(d.d50k, coords = d.co,add=TRUE)
+plot(districts, main = "Distance based neighbour (0-200km)")
+plot.nb(d.d200k, coords = d.co,add=TRUE)
+
+d.del.w <- nb2listw(d.del, style = "B",zero.policy = TRUE)
+d.soi.w <- nb2listw(d.soi, style = "B",zero.policy = TRUE)
+d.gab.w <- nb2listw(d.gab, style = "B",zero.policy = TRUE)
+d.rel.w <- nb2listw(d.rel, style = "B",zero.policy = TRUE)
+d.k2.w <- nb2listw(d.k2, style = "B",zero.policy = TRUE)
+d.k5.w <- nb2listw(d.k5, style = "B",zero.policy = TRUE)
+d.d50k.w <- nb2listw(d.d50k, style = "B",zero.policy = TRUE)
+d.d200k.w <- nb2listw(d.d200k, style = "B",zero.policy = TRUE)
+
+class(d.k5.w)
+summary(d.k5.w)
+
+CP.mor.del <- moran.test(x=districts$CP, listw = d.del.w ,zero.policy=TRUE, alternative = "two.sided")
+CP.mor.soi <- moran.test(x=districts$CP, listw = d.soi.w ,zero.policy=TRUE, alternative = "two.sided")
+CP.mor.gab <- moran.test(x=districts$CP, listw = d.gab.w ,zero.policy=TRUE, alternative = "two.sided")
+CP.mor.rel <- moran.test(x=districts$CP, listw = d.rel.w ,zero.policy=TRUE, alternative = "two.sided")
+CP.mor.k2 <- moran.test(x=districts$CP, listw = d.k2.w ,zero.policy=TRUE, alternative = "two.sided")
+CP.mor.k5 <- moran.test(x=districts$CP, listw = d.k5.w ,zero.policy=TRUE, alternative = "two.sided")
+CP.mor.d50k <- moran.test(x=districts$CP, listw = d.d50k.w ,zero.policy=TRUE, alternative = "two.sided")
+CP.mor.d200k <- moran.test(x=districts$CP, listw = d.d200k.w ,zero.policy=TRUE, alternative = "two.sided")
+
+library(knitr)
+
+kable(x = t(data.frame(Delaunay=CP.mor.del$estimate,
+                 SOI=CP.mor.soi$estimate,
+                 Gabriel=CP.mor.gab$estimate,
+                 Relative=CP.mor.rel$estimate,
+                 K2=CP.mor.k2$estimate,
+                 K5=CP.mor.k5$estimate,
+                 D50km=CP.mor.d50k$estimate,
+                 D200km=CP.mor.d200k$estimate)),
+      caption = paste("Moran's I for cases (2012) of ",poison.names[3],"; rows show different methods to determine weights/neighbors",sep = "")
+)
+
+par(mfrow = c(2,2))
+moran.plot(x=districts$CP, listw = d.del.w, main = "Delaunay", spChk = FALSE, zero.policy = TRUE,
+           labels=as.character(districts@data$DISTRICT))
+moran.plot(x=districts$CP, listw = d.gab.w, main = "Gabriel", spChk = FALSE, zero.policy = TRUE,
+           labels=as.character(districts@data$DISTRICT))
+moran.plot(x=districts$CP, listw = d.k5.w, main = "K5",
+           labels=as.character(districts@data$DISTRICT))
+moran.plot(x=districts$CP, listw = d.d200k.w, main = "200km", spChk = FALSE, zero.policy = TRUE,
+           labels=as.character(districts@data$DISTRICT))
+
+CP.mor.k5.mc <- moran.mc(x=districts$CP, listw = d.k5.w,zero.policy=TRUE,nsim = 99)
+CP.mor.k5.mc
+
+par(mfrow = c(1,1))
+tmp <- CP.mor.k5.mc$res[1:length(CP.mor.k5.mc$res)-1]
+zz <- density(tmp)
+plot(zz,main="Moran’s I Permutation Test",xlab="Reference Distribution", col = 2,ylim=c(0,5),lwd=2)
+hist(tmp,freq=F,add=T)
+abline(v=CP.mor.k5.mc$statistic,lwd=2,col="green")
+
+CP.mor.del.co <- sp.correlogram(neighbours = d.del, var = districts$CP, order = 5, method = "I",style = "B", zero.policy = TRUE)
+CP.mor.soi.co <- sp.correlogram(neighbours = d.soi, var = districts$CP, order = 5, method = "I",style = "B", zero.policy = TRUE)
+CP.mor.k5.co <- sp.correlogram(neighbours = d.k5, var = districts$CP, order = 5, method = "I",style = "B", zero.policy = TRUE)
+CP.mor.d50k.co <- sp.correlogram(neighbours = d.d50k, var = districts$CP, order = 5, method = "I",style = "B", zero.policy = TRUE)
+
+par(mfrow = c(2,2))
+plot(CP.mor.del.co,main = "Delaunay")
+plot(CP.mor.soi.co,main = "Sphere of Influence")
+plot(CP.mor.k5.co,main = "K5")
+plot(CP.mor.d50k.co,main = "50km distance")
+```
+
+And what about local differences?
+
+```{r localMoran, eval=TRUE, echo=TRUE}
+CP.mor.loc.del <- localmoran(x=districts$CP, listw = d.del.w ,zero.policy=TRUE, alternative = "two.sided")
+```
+
